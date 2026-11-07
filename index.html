@@ -27,13 +27,25 @@ p{opacity:.85;min-height:1.4em}a{color:var(--ac)}
 <label>أو اختر ملف / صورة (يتقدم على النص)</label><input id=ef type=file>
 <label>دقة الصورة (السرعة)</label>
 <select id=er><option value=240>كاملة 320×240 — 36 ثانية</option><option value=120>متوسطة — 18 ثانية</option><option value=60>سريعة — 9 ثواني</option></select>
-<div class=row><button id=send>▶ إرسال عبر السماعة</button><button id=wav>💾 حفظ WAV</button></div><p id=es></p>
+<div class=row><button id=send>▶ إرسال عبر السماعة</button><button id=wav>💾 حفظ WAV</button></div>
+<h3>🔊 إرسال ملف صوتي جاهز (WAV / MP3 / M4A)</h3>
+<input id=af type=file accept="audio/*">
+<div class=row><button id=asend>▶ تشغيل الملف عبر السماعة</button><button id=astop disabled>⏹ إيقاف</button></div>
+<h3>🎵 ضغط وإرسال مقطع أغنية (قصير)</h3>
+<input id=cf type=file accept="audio/*">
+<div class=row><select id=cl><option value=5>أول 5 ثواني</option><option value=3>أول 3 ثواني</option><option value=10>أول 10 ثواني</option></select><select id=cr><option value=1>نسخة واحدة</option><option value=2>نسختان (أأمن، ضعف المدة)</option></select></div>
+<button id=cs>🗜 ضغط وإرسال</button><p id=es></p>
 </section>
 
 <section id=dec hidden>
 <label>كلمة السر (نفس كلمة المرسل)</label><input id=rp autocomplete=off>
 <div class=row><button id=ls>🎤 ابدأ الاستماع</button><button id=lx disabled>⏹ إيقاف وفك</button><label class=btn>📂 ملف صوتي<input id=rf type=file accept="audio/*" hidden></label></div>
 <div class=meter><i id=mt></i></div><p id=rs></p>
+<h3>🎧 الصوت المستلم (Received Audio)</h3>
+<audio id=ra controls style="width:100%"></audio>
+<div class=row><button id=rw disabled>💾 حفظ الصوت المستلم WAV</button></div>
+<h3>🎵 الأغنية المستلمة (Received Song)</h3>
+<audio id=rm controls style="width:100%"></audio><a id=rl hidden download=song.webm>⬇ تحميل المقطع</a>
 <h3>📝 النص المستلم (Receive TXT)</h3>
 <textarea id=rt rows=5 readonly></textarea><a id=dl hidden download=received.bin>⬇ تحميل الملف المستلم</a>
 <h3>🖼 الصورة المستلمة (Receive Image)</h3>
@@ -83,8 +95,8 @@ function synth(lines){const sg=[],ad=(f,d)=>sg.push(f,d),F=v=>1500+v*800/255;
  const o=new Float32Array(Math.ceil(T*FS)+2);let t=0,n=0,ph=0;
  for(let i=0;i<sg.length;i+=2){t+=sg[i+1];const e=Math.round(t*FS),w=2*Math.PI*sg[i]/FS;for(;n<e;n++){ph+=w;o[n]=Math.sin(ph)*.8}}
  return o}
-function wav(s){const b=new DataView(new ArrayBuffer(44+s.length*2)),w=(o,t)=>[...t].forEach((c,i)=>b.setUint8(o+i,c.charCodeAt(0)));
- w(0,'RIFF');b.setUint32(4,36+s.length*2,true);w(8,'WAVEfmt ');b.setUint32(16,16,true);b.setUint16(20,1,true);b.setUint16(22,1,true);b.setUint32(24,FS,true);b.setUint32(28,FS*2,true);b.setUint16(32,2,true);b.setUint16(34,16,true);w(36,'data');b.setUint32(40,s.length*2,true);
+function wav(s,r=FS){const b=new DataView(new ArrayBuffer(44+s.length*2)),w=(o,t)=>[...t].forEach((c,i)=>b.setUint8(o+i,c.charCodeAt(0)));
+ w(0,'RIFF');b.setUint32(4,36+s.length*2,true);w(8,'WAVEfmt ');b.setUint32(16,16,true);b.setUint16(20,1,true);b.setUint16(22,1,true);b.setUint32(24,r,true);b.setUint32(28,r*2,true);b.setUint16(32,2,true);b.setUint16(34,16,true);w(36,'data');b.setUint32(40,s.length*2,true);
  for(let i=0;i<s.length;i++)b.setInt16(44+i*2,s[i]*32767,true);return new Blob([b],{type:'audio/wav'})}
 
 async function build(){const p=pw('ep'),f=$('ef').files[0];let lines;
@@ -98,6 +110,52 @@ let last;
 $('send').onclick=async()=>{try{$('es').textContent='جارٍ التحضير…';last=await build();const c=new AudioContext(),b=c.createBuffer(1,last.length,FS);b.copyToChannel(last,0);const s=c.createBufferSource();s.buffer=b;s.connect(c.destination);s.start();
  $('es').textContent='يُرسَل الآن… المدة '+Math.round(last.length/FS)+' ثانية';s.onended=()=>{$('es').textContent='انتهى الإرسال ✔';c.close()}}catch(e){$('es').textContent='⚠ '+e}};
 $('wav').onclick=async()=>{try{last=await build();const a=document.createElement('a');a.href=URL.createObjectURL(wav(last));a.download='sstv.wav';a.click()}catch(e){$('es').textContent='⚠ '+e}};
+
+/* ---- send an existing audio file ---- */
+let asrc,actx;
+$('asend').onclick=async()=>{const f=$('af').files[0];if(!f){$('es').textContent='⚠ اختر ملفاً صوتياً أولاً';return}
+ try{actx=new AudioContext();const b=await actx.decodeAudioData(await f.arrayBuffer());asrc=actx.createBufferSource();asrc.buffer=b;asrc.connect(actx.destination);asrc.start();
+ $('asend').disabled=true;$('astop').disabled=false;$('es').textContent='يُرسَل الملف… '+Math.round(b.duration)+' ثانية';
+ asrc.onended=()=>{$('es').textContent='انتهى إرسال الملف ✔';$('asend').disabled=false;$('astop').disabled=true;actx.close()}}catch(e){$('es').textContent='⚠ تعذر قراءة الملف الصوتي'}};
+$('astop').onclick=()=>{asrc.stop()};
+
+/* ---- compressed song: Opus 6kbps -> rows of 7 data bytes + index + CRC8 ---- */
+function crc8(a){let c=0;for(const v of a){c^=v;for(let k=0;k<8;k++)c=c&128?(c<<1^7)&255:c<<1&255}return c}
+function rowsOf(pl,p,rep){const key=p?ks(pl.length+7,p):null,n=Math.ceil(pl.length/7),o=new Uint8Array(n*rep*10);
+ for(let r=0;r<rep;r++)for(let i=0;i<n;i++){const q=(r*n+i)*10;o[q]=i>>8;o[q+1]=i&255;
+  for(let j=0;j<7;j++){const m=i*7+j;o[q+2+j]=(m<pl.length?pl[m]:0)^(key?key[m]:0)}
+  o[q+9]=crc8(o.subarray(q,q+9))}return o}
+async function squeeze(f,sec){const ac=new AudioContext(),b=await ac.decodeAudioData(await f.arrayBuffer()),d=ac.createMediaStreamDestination(),
+ mt=['audio/webm;codecs=opus','audio/ogg;codecs=opus'].find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t));
+ if(!mt)throw'المتصفح لا يدعم ضغط Opus (جرّب Chrome أو Firefox)';
+ d.channelCount=1;d.channelCountMode='explicit';
+ const mr=new MediaRecorder(d.stream,{mimeType:mt,audioBitsPerSecond:6000}),ch=[];mr.ondataavailable=e=>ch.push(e.data);
+ const s=ac.createBufferSource();s.buffer=b;s.connect(d);const done=new Promise(r=>mr.onstop=r);
+ mr.start();s.start(0,0,sec);setTimeout(()=>mr.stop(),Math.min(sec,b.duration)*1000+300);await done;ac.close();
+ return[new Uint8Array(await new Blob(ch).arrayBuffer()),mt]}
+function play(s){const c=new AudioContext(),b=c.createBuffer(1,s.length,FS);b.copyToChannel(s,0);const o=c.createBufferSource();o.buffer=b;o.connect(c.destination);o.start();
+ $('es').textContent='يُرسَل الآن… المدة ≈ '+(s.length/FS/60).toFixed(1)+' دقيقة';o.onended=()=>{$('es').textContent='انتهى الإرسال ✔';c.close()}}
+$('cs').onclick=async()=>{try{const f=$('cf').files[0];if(!f)throw'اختر ملفاً صوتياً';$('es').textContent='جارٍ الضغط (يستغرق مدة المقطع)…';
+ const sec=+$('cl').value,rep=+$('cr').value,p=pw('ep'),[au,mt]=await squeeze(f,sec),n=au.length,pl=new Uint8Array(n+5);
+ if(!n)throw'فشل الضغط';if((n+5)/7*rep>65000)throw'المقطع كبير';
+ pl[0]=83;pl[1]=mt.includes('ogg')?66:65;pl[2]=n>>16&255;pl[3]=n>>8&255;pl[4]=n&255;pl.set(au,5);
+ $('es').textContent='حجم المقطع المضغوط '+n+' بايت — جارٍ التحضير…';await sleep();
+ last=synth(dataLines(rowsOf(pl,p,rep)));play(last)}catch(e){$('es').textContent='⚠ '+e}};
+function parseA(Ys,L,p){const nr=L>>1,B=new Uint8Array(nr*10),got=new Map();
+ for(let r=0;r<nr;r++)for(let c=0;c<80;c++){let s=0;for(let j=0;j<4;j++)s+=Ys[2*r+(j>>1)][4*c+1+(j&1)];if(s>=512){const q=r*80+c;B[q>>3]|=128>>(q&7)}}
+ for(let r=0;r<nr;r++){const w=B.subarray(r*10,r*10+10);if(crc8(w.subarray(0,9))==w[9]){const i=w[0]<<8|w[1];if(!got.has(i))got.set(i,w.slice(2,9))}}
+ if(got.size<8)return null;
+ if(!got.has(0))return{err:'السطر الأول مفقود — أعد الإرسال (يُفضّل نسختان)'};
+ const k0=p?ks(7,p):new Uint8Array(7),h=got.get(0).map((v,i)=>v^k0[i]);
+ if(h[0]!=83||(h[1]!=65&&h[1]!=66))return{err:'كلمة السر لا تطابق المرسل'};
+ const len=h[2]<<16|h[3]<<8|h[4],need=Math.ceil((len+5)/7);let miss=0;for(let i=0;i<need;i++)if(!got.has(i))miss++;
+ if(miss)return{err:'نقص '+miss+' سطراً من '+need+' — أعد الإرسال بنسختين أو قرّب الجهازين'};
+ const key=p?ks(need*7,p):new Uint8Array(need*7),o=new Uint8Array(len);
+ for(let m=5;m<len+5;m++)o[m-5]=got.get(m/7|0)[m%7]^key[m];
+ return{audio:o,type:h[1]==66?'audio/ogg':'audio/webm'}}
+function showA(a){if(a.err){$('rs').textContent='⚠ '+a.err;return}
+ const u=URL.createObjectURL(new Blob([a.audio],{type:a.type}));$('rm').src=u;$('rl').href=u;$('rl').hidden=false;
+ $('rt').value='';$('dl').hidden=true;$('rs').textContent='✔ استُلم مقطع مضغوط ('+a.audio.length+' بايت) — شغّله في قسم الأغنية المستلمة'}
 
 /* ---- decode ---- */
 function dec(x,fs){const N=x.length,K=31,h=new Float32Array(N),P=new Float64Array(N+1),co=[];
@@ -120,9 +178,11 @@ function dec(x,fs){const N=x.length,K=31,h=new Float32Array(N),P=new Float64Arra
   Ys.push(Y);Cs.push(C);isV.push(avg(b+100.5*ms,b+104*ms)<1900)}
  return{L:pos.length,Ys,Cs,isV}}
 const sleep=()=>new Promise(r=>setTimeout(r,40));
-async function proc(x,fs){$('rs').textContent='جارٍ فك الإشارة…';$('mt').style.width=0;await sleep();
+let rxw;$('rw').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(rxw);a.download='received.wav';a.click()};
+async function proc(x,fs){rxw=wav(x,fs);$('ra').src=URL.createObjectURL(rxw);$('rw').disabled=false;$('rs').textContent='جارٍ فك الإشارة…';$('mt').style.width=0;await sleep();
  const p=pw('rp'),r=dec(x,fs);if(!r||r.L<4){$('rs').textContent='⚠ لم أجد إشارة SSTV. قرّب الجهازين وارفع الصوت وقلل الضجيج.';return}
- const d=parse(r.Ys,r.L,p),g=$('rc').getContext('2d');
+ const d=parse(r.Ys,r.L,p),g=$('rc').getContext('2d'),a=d?null:parseA(r.Ys,r.L,p);
+ if(a){showA(a);return}
  if(d){let t;try{t=new TextDecoder('utf-8',{fatal:true}).decode(d)}catch{t=null}
   if(t!==null){$('rt').value=t;$('dl').hidden=true}else{$('rt').value='(ملف ثنائي — '+d.length+' بايت)';$('dl').href=URL.createObjectURL(new Blob([d]));$('dl').hidden=false}
   g.clearRect(0,0,W,240);$('rs').textContent='✔ استُلمت بيانات ('+d.length+' بايت) في '+r.L+' سطر'+(p?' — كلمة السر صحيحة':'');return}
