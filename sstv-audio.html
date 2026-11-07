@@ -1,0 +1,146 @@
+<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SSTV صوتي</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--cd:#f1f3f5;--ac:#0b6bcb;--bd:#cdd2d8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171b;--fg:#eceff3;--cd:#21262d;--ac:#5aa9ff;--bd:#3a424b;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#14171b;--fg:#eceff3;--cd:#21262d;--ac:#5aa9ff;--bd:#3a424b;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:16px system-ui,sans-serif;max-width:720px;margin:0 auto;padding:14px}
+h1{font-size:20px}h3{margin:18px 0 6px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+button,.btn{background:var(--cd);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:10px 14px;font:inherit;cursor:pointer}
+button.on,#send,#ls{background:var(--ac);color:#fff;border-color:var(--ac)}
+button:disabled{opacity:.5}
+.tabs button{flex:1}
+input,textarea,select{width:100%;box-sizing:border-box;background:var(--cd);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:9px;font:inherit;margin:4px 0 10px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+.meter{height:8px;background:var(--cd);border-radius:4px;overflow:hidden}.meter i{display:block;height:100%;width:0;background:var(--ac)}
+canvas{width:100%;aspect-ratio:4/3;background:var(--cd);border-radius:8px;display:block;margin-bottom:8px}
+p{opacity:.85;min-height:1.4em}a{color:var(--ac)}
+</style></head><body>
+<h1>📡 SSTV صوتي — متوافق مع Robot36</h1>
+<div class=tabs><button id=t1 class=on>المرسل Encoder</button><button id=t2>المستقبل Decoder</button></div>
+
+<section id=enc>
+<label>كلمة السر (اختياري — نفسها بالضبط عند المستقبل)</label><input id=ep autocomplete=off>
+<label>الرسالة النصية</label><textarea id=et rows=4></textarea>
+<label>أو اختر ملف / صورة (يتقدم على النص)</label><input id=ef type=file>
+<label>دقة الصورة (السرعة)</label>
+<select id=er><option value=240>كاملة 320×240 — 36 ثانية</option><option value=120>متوسطة — 18 ثانية</option><option value=60>سريعة — 9 ثواني</option></select>
+<div class=row><button id=send>▶ إرسال عبر السماعة</button><button id=wav>💾 حفظ WAV</button></div><p id=es></p>
+</section>
+
+<section id=dec hidden>
+<label>كلمة السر (نفس كلمة المرسل)</label><input id=rp autocomplete=off>
+<div class=row><button id=ls>🎤 ابدأ الاستماع</button><button id=lx disabled>⏹ إيقاف وفك</button><label class=btn>📂 ملف صوتي<input id=rf type=file accept="audio/*" hidden></label></div>
+<div class=meter><i id=mt></i></div><p id=rs></p>
+<h3>📝 النص المستلم (Receive TXT)</h3>
+<textarea id=rt rows=5 readonly></textarea><a id=dl hidden download=received.bin>⬇ تحميل الملف المستلم</a>
+<h3>🖼 الصورة المستلمة (Receive Image)</h3>
+<canvas id=rc width=320 height=240></canvas><button id=sv>💾 حفظ الصورة</button>
+</section>
+
+<script>
+const $=id=>document.getElementById(id),W=320,FS=44100,cv=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c};
+const pw=id=>$(id).value.trim().normalize('NFC');
+$('t1').onclick=$('t2').onclick=e=>{const a=e.target.id=='t1';$('enc').hidden=!a;$('dec').hidden=a;$('t1').className=a?'on':'';$('t2').className=a?'':'on'};
+
+/* ---- password -> keystream / permutation ---- */
+function seed(p){let h=0xdeadbeef^p.length,g=0x41c6ce57;for(let i=0;i<p.length;i++){const c=p.charCodeAt(i);h=Math.imul(h^c,2654435761);g=Math.imul(g^c,1597334677)}h=Math.imul(h^h>>>16,2246822507)^Math.imul(g^g>>>13,3266489909);return h>>>0}
+function rng(s){return()=>{s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function perm(n,p){const r=rng(seed(p)),a=Array.from({length:n},(_,i)=>i);for(let i=n-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+function ks(n,p){const r=rng(seed(p)^0x5bd1e995),o=new Uint8Array(n);for(let i=0;i<n;i++)o[i]=r()*256;return o}
+/* scramble 2x2 pixel blocks (keeps chroma pairs intact, survives the lossy channel) */
+function scr(d,L,p,inv){const bw=W/2,n=bw*(L>>1),pm=perm(n,p),o=new Uint8ClampedArray(d.length);
+ for(let i=0;i<n;i++){const s=inv?i:pm[i],t=inv?pm[i]:i;
+  for(let k=0;k<4;k++){const a=(((s/bw|0)*2+(k>>1))*W+(s%bw)*2+(k&1))*4,b=(((t/bw|0)*2+(k>>1))*W+(t%bw)*2+(k&1))*4;o[b]=d[a];o[b+1]=d[a+1];o[b+2]=d[a+2];o[b+3]=255}}
+ return o}
+
+/* ---- build Robot36 lines ---- */
+function imgLines(d,L){const o=[];for(let y=0;y<L;y++){const Y=new Uint8ClampedArray(W),C=new Uint8ClampedArray(160),odd=y&1,y0=y&~1;
+ for(let x=0;x<W;x++){const i=(y*W+x)*4;Y[x]=16+.25679*d[i]+.50413*d[i+1]+.09791*d[i+2]}
+ for(let k=0;k<160;k++){let r=0,g=0,b=0;for(let j=0;j<4;j++){const i=((y0+(j>>1))*W+2*k+(j&1))*4;r+=d[i];g+=d[i+1];b+=d[i+2]}r/=4;g/=4;b/=4;
+  C[k]=odd?128-.148223*r-.290993*g+.439216*b:128+.439216*r-.367788*g-.071427*b}
+ o.push({Y,C,odd})}return o}
+/* data: 1 bit per 4x2 black/white cell, 80 cells per row */
+function dataLines(b){const rows=Math.max(10,Math.ceil(b.length*8/80)),o=[];
+ for(let y=0;y<rows*2;y++){const Y=new Uint8ClampedArray(W),C=new Uint8ClampedArray(160).fill(128),r=y>>1;
+  for(let x=0;x<W;x++){const q=r*80+(x>>2);Y[x]=(b[q>>3]>>(7-(q&7)))&1?255:0}
+  o.push({Y,C,odd:y&1})}return o}
+function pack(d,p){const n=d.length,b=new Uint8Array(n+6);b[0]=83;b[1]=84;b[2]=n>>8;b[3]=n&255;b.set(d,4);let s=0;for(let i=0;i<n;i++)s=(s+d[i]*(i+1))&65535;b[n+4]=s>>8;b[n+5]=s&255;
+ if(p){const k=ks(b.length,p);for(let i=0;i<b.length;i++)b[i]^=k[i]}return b}
+function parse(Ys,L,p){const rows=L>>1,n=rows*80>>3,b=new Uint8Array(n);
+ for(let r=0;r<rows;r++)for(let c=0;c<80;c++){let s=0;for(let j=0;j<4;j++)s+=Ys[2*r+(j>>1)][4*c+1+(j&1)];if(s>=512){const q=r*80+c;b[q>>3]|=128>>(q&7)}}
+ if(p){const k=ks(n,p);for(let i=0;i<n;i++)b[i]^=k[i]}
+ if(b[0]!=83||b[1]!=84)return null;const m=b[2]<<8|b[3];if(m+6>n)return null;const d=b.slice(4,4+m);let s=0;for(let i=0;i<m;i++)s=(s+d[i]*(i+1))&65535;
+ return s==(b[m+4]<<8|b[m+5])?d:null}
+
+/* ---- synth (Robot 36, VIS 8) ---- */
+function synth(lines){const sg=[],ad=(f,d)=>sg.push(f,d),F=v=>1500+v*800/255;
+ ad(1900,.3);ad(1200,.01);ad(1900,.3);ad(1200,.03);[0,0,0,1,0,0,0,1].forEach(b=>ad(b?1100:1300,.03));ad(1200,.03);
+ for(const l of lines){ad(1200,.009);ad(1500,.003);for(let k=0;k<W;k++)ad(F(l.Y[k]),.088/W);ad(l.odd?2300:1500,.0045);ad(1900,.0015);for(let k=0;k<160;k++)ad(F(l.C[k]),.044/160)}
+ ad(1500,.1);let T=0;for(let i=1;i<sg.length;i+=2)T+=sg[i];
+ const o=new Float32Array(Math.ceil(T*FS)+2);let t=0,n=0,ph=0;
+ for(let i=0;i<sg.length;i+=2){t+=sg[i+1];const e=Math.round(t*FS),w=2*Math.PI*sg[i]/FS;for(;n<e;n++){ph+=w;o[n]=Math.sin(ph)*.8}}
+ return o}
+function wav(s){const b=new DataView(new ArrayBuffer(44+s.length*2)),w=(o,t)=>[...t].forEach((c,i)=>b.setUint8(o+i,c.charCodeAt(0)));
+ w(0,'RIFF');b.setUint32(4,36+s.length*2,true);w(8,'WAVEfmt ');b.setUint32(16,16,true);b.setUint16(20,1,true);b.setUint16(22,1,true);b.setUint32(24,FS,true);b.setUint32(28,FS*2,true);b.setUint16(32,2,true);b.setUint16(34,16,true);w(36,'data');b.setUint32(40,s.length*2,true);
+ for(let i=0;i<s.length;i++)b.setInt16(44+i*2,s[i]*32767,true);return new Blob([b],{type:'audio/wav'})}
+
+async function build(){const p=pw('ep'),f=$('ef').files[0];let lines;
+ if(f&&f.type.startsWith('image/')){const L=+$('er').value,bm=await createImageBitmap(f),t=cv(320,240),g=t.getContext('2d'),s=Math.max(320/bm.width,240/bm.height);
+  g.drawImage(bm,(320-bm.width*s)/2,(240-bm.height*s)/2,bm.width*s,bm.height*s);
+  const c2=cv(W,L),g2=c2.getContext('2d');g2.drawImage(t,0,0,W,L);let d=g2.getImageData(0,0,W,L).data;if(p)d=scr(d,L,p,false);lines=imgLines(d,L)}
+ else{const b=f?new Uint8Array(await f.arrayBuffer()):new TextEncoder().encode($('et').value);
+  if(!b.length)throw'اكتب رسالة أو اختر ملفاً';if(b.length>1194)throw'الحجم كبير: الحد الأقصى ≈1190 بايت لغير الصور';lines=dataLines(pack(b,p))}
+ return synth(lines)}
+let last;
+$('send').onclick=async()=>{try{$('es').textContent='جارٍ التحضير…';last=await build();const c=new AudioContext(),b=c.createBuffer(1,last.length,FS);b.copyToChannel(last,0);const s=c.createBufferSource();s.buffer=b;s.connect(c.destination);s.start();
+ $('es').textContent='يُرسَل الآن… المدة '+Math.round(last.length/FS)+' ثانية';s.onended=()=>{$('es').textContent='انتهى الإرسال ✔';c.close()}}catch(e){$('es').textContent='⚠ '+e}};
+$('wav').onclick=async()=>{try{last=await build();const a=document.createElement('a');a.href=URL.createObjectURL(wav(last));a.download='sstv.wav';a.click()}catch(e){$('es').textContent='⚠ '+e}};
+
+/* ---- decode ---- */
+function dec(x,fs){const N=x.length,K=31,h=new Float32Array(N),P=new Float64Array(N+1),co=[];
+ for(let n=1;n<=K;n+=2)co.push(2/(Math.PI*n)*(.54+.46*Math.cos(Math.PI*n/(K+1))));
+ for(let i=K;i<N-K;i++){let s=0;for(let j=0,n=1;j<co.length;j++,n+=2)s+=co[j]*(x[i-n]-x[i+n]);h[i]=s}
+ for(let i=0;i<N;i++){let f=1900;if(i>0){const re=x[i]*x[i-1]+h[i]*h[i-1],im=h[i]*x[i-1]-x[i]*h[i-1];f=Math.max(1000,Math.min(2500,Math.atan2(im,re)*fs/6.28318))}P[i+1]=P[i]+f}
+ const ms=fs/1000,avg=(a,b)=>{a=Math.max(0,Math.round(a));b=Math.min(N,Math.round(b));return b>a?(P[b]-P[a])/(b-a):1900};
+ const st=Math.max(1,fs/10000|0),w=fs*.0005|0,c=[];let run=-1;
+ for(let i=w;i<N-w;i+=st){const v=(P[i+w]-P[i-w])/(2*w),lo=v>1110&&v<1290;
+  if(lo&&run<0)run=i;else if(!lo&&run>=0){if((i-run)/ms>6){const pv=avg(i+.6*ms,i+2.6*ms);if(pv>1380&&pv<1640)c.push(i+.2*ms-9*ms)}run=-1}}
+ const T=150*ms,tol=6*ms;let s=-1;for(let i=0;i<c.length&&s<0;i++)if(c.some(q=>Math.abs(q-c[i]-T)<tol))s=i;if(s<0)return null;
+ let cur=c[s],miss=0,pos=[],ok=[],good=true;
+ while(cur+T<=N){pos.push(cur);ok.push(good);let b=null;for(const q of c)if(Math.abs(q-cur-T)<tol&&(b==null||Math.abs(q-cur-T)<Math.abs(b-cur-T)))b=q;
+  if(b!=null){cur=b;miss=0;good=true}else{cur+=T;good=false;if(++miss>3)break}}
+ while(pos.length&&!ok[ok.length-1]){pos.pop();ok.pop()}
+ const V=(a,e)=>Math.max(0,Math.min(255,(avg(a,e)-1500)*255/800)),Ys=[],Cs=[],isV=[];
+ for(const b of pos){const Y=new Uint8Array(W),C=new Uint8Array(160);
+  for(let k=0;k<W;k++)Y[k]=V(b+(12+k*88/W)*ms,b+(12+(k+1)*88/W)*ms);
+  for(let k=0;k<160;k++)C[k]=V(b+(106+k*44/160)*ms,b+(106+(k+1)*44/160)*ms);
+  Ys.push(Y);Cs.push(C);isV.push(avg(b+100.5*ms,b+104*ms)<1900)}
+ return{L:pos.length,Ys,Cs,isV}}
+const sleep=()=>new Promise(r=>setTimeout(r,40));
+async function proc(x,fs){$('rs').textContent='جارٍ فك الإشارة…';$('mt').style.width=0;await sleep();
+ const p=pw('rp'),r=dec(x,fs);if(!r||r.L<4){$('rs').textContent='⚠ لم أجد إشارة SSTV. قرّب الجهازين وارفع الصوت وقلل الضجيج.';return}
+ const d=parse(r.Ys,r.L,p),g=$('rc').getContext('2d');
+ if(d){let t;try{t=new TextDecoder('utf-8',{fatal:true}).decode(d)}catch{t=null}
+  if(t!==null){$('rt').value=t;$('dl').hidden=true}else{$('rt').value='(ملف ثنائي — '+d.length+' بايت)';$('dl').href=URL.createObjectURL(new Blob([d]));$('dl').hidden=false}
+  g.clearRect(0,0,W,240);$('rs').textContent='✔ استُلمت بيانات ('+d.length+' بايت) في '+r.L+' سطر'+(p?' — كلمة السر صحيحة':'');return}
+ const L=r.L,c=[60,120,240].find(c=>L>=c*.8&&L<=c+3),H=c||(L&~1),o=new Uint8ClampedArray(W*H*4);
+ for(let y=0;y<Math.min(L,H);y++){const j=r.isV[y]?(y+1<L&&!r.isV[y+1]?y+1:-1):-1,i2=r.isV[y]?-1:(y>0&&r.isV[y-1]?y-1:-1);
+  for(let x=0;x<W;x++){const Yv=1.164*(r.Ys[y][x]-16),vv=(r.isV[y]?r.Cs[y][x>>1]:i2>=0?r.Cs[i2][x>>1]:128)-128,uu=(!r.isV[y]?r.Cs[y][x>>1]:j>=0?r.Cs[j][x>>1]:128)-128,q=(y*W+x)*4;
+   o[q]=Yv+1.596*vv;o[q+1]=Yv-.813*vv-.391*uu;o[q+2]=Yv+2.018*uu;o[q+3]=255}}
+ for(let y=L;y<H;y++)for(let x=0;x<W;x++)o[(y*W+x)*4+3]=255;
+ const img=new ImageData(p?scr(o,H,p,true):o,W,H),cn=$('rc');cn.height=H;cn.getContext('2d').putImageData(img,0,0);
+ $('rt').value='';$('dl').hidden=true;
+ $('rs').textContent='✔ استُلمت صورة ('+L+' سطر).'+(p?' إذا ظهرت مشوشة فكلمة السر لا تطابق المرسل (أو الإشارة ضعيفة).':' إذا ظهرت مشوشة بالكامل فربما أُرسلت مشفرة: اكتب كلمة السر.')+' لا يوجد نص صالح.'}
+let ac,stream,node,ch=[];
+$('ls').onclick=async()=>{try{ac=new AudioContext();stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+ const src=ac.createMediaStreamSource(stream);node=ac.createScriptProcessor(4096,1,1);ch=[];let n=0;
+ node.onaudioprocess=e=>{const d=new Float32Array(e.inputBuffer.getChannelData(0));ch.push(d);n+=d.length;let m=0;for(let i=0;i<d.length;i+=16)m=Math.max(m,Math.abs(d[i]));$('mt').style.width=Math.min(100,m*150)+'%';$('rs').textContent='🎙 يستمع… '+(n/ac.sampleRate).toFixed(0)+' ث'};
+ src.connect(node);node.connect(ac.destination);$('ls').disabled=true;$('lx').disabled=false}catch(e){$('rs').textContent='⚠ تعذر فتح الميكروفون: '+e.message}};
+$('lx').onclick=()=>{node.disconnect();stream.getTracks().forEach(t=>t.stop());const fs=ac.sampleRate;ac.close();let n=0;ch.forEach(c=>n+=c.length);const x=new Float32Array(n);let o=0;ch.forEach(c=>{x.set(c,o);o+=c.length});ch=[];
+ $('ls').disabled=false;$('lx').disabled=true;proc(x,fs)};
+$('rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const c=new AudioContext(),b=await c.decodeAudioData(await f.arrayBuffer());await proc(b.getChannelData(0),b.sampleRate);c.close()}catch(er){$('rs').textContent='⚠ تعذر قراءة الملف الصوتي'}};
+$('sv').onclick=()=>{const t=cv(320,240);t.getContext('2d').drawImage($('rc'),0,0,320,240);t.toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='received.png';a.click()})};
+</script></body></html>
